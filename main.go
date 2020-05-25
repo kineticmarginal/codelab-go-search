@@ -1,10 +1,10 @@
 package main
 
 import (
-"bufio"
-"flag"
-"fmt"
-"os"
+	"bufio"
+	"flag"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
