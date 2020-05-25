@@ -1,42 +1,25 @@
 package main
 
 import (
-	"bufio"
-	"flag"
-	"fmt"
-	"os"
+"bufio"
+"flag"
+"fmt"
+"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
 var (
 	recursiveFlag = flag.Bool("r", false, "recursive search: for directories")
+	lineNumber = flag.Bool("n", false, "print line number")
 )
 
 type ScanResult struct {
 	file       string
 	lineNumber int
 	line       string
-}
-
-func scanFile(fpath, pattern string) ([]string, error) {
-	f, err := os.Open(fpath)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	scanner.Split(bufio.ScanLines)
-	result := make([]string, 0)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.Contains(line, pattern) {
-			result = append(result, line)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return result, nil
 }
 
 func exit(format string, val ...interface{}) {
@@ -49,18 +32,80 @@ func exit(format string, val ...interface{}) {
 	os.Exit(1)
 }
 
-func processFile(fpath string, pattern string) {
-	res, err := scanFile(fpath, pattern)
+func scanFile(fpath, pattern string) ([]ScanResult) {
+	f, err := os.Open(fpath)
 	if err != nil {
-		exit("Error scanning %s: %s", fpath, err.Error())
+		panic(err)
 	}
-	for _, line := range res {
-		fmt.Println(line)
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Split(bufio.ScanLines)
+	result := make([]ScanResult, 0)
+	lineN := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, pattern) {
+			result = append(result, ScanResult{
+				file:       fpath,
+				lineNumber: lineN,
+				line:       line,
+			})
+		}
+		lineN++
+	}
+	if err := scanner.Err(); err != nil {
+		panic(err)
+	}
+	return result
+}
+
+func processFile(fpath string, pattern string) {
+	res := scanFile(fpath, pattern)
+	for _, arg := range res {
+		if *lineNumber {
+			fmt.Printf("%s:%d:%s\n", arg.file, arg.lineNumber, arg.line)
+		} else {
+			fmt.Printf("%s:%s\n", arg.file, arg.line)
+		}
 	}
 }
 
-func processDirectory(dir string, pattern string) {
+func processDirectory(dir string, pattern string) chan []ScanResult{
+	res := make(chan []ScanResult)
+	go func() {
+		var wg sync.WaitGroup
+		filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				return nil
+			}
+			wg.Add(1)
+			go func() {
+				res <- scanFile(path, pattern)
+				wg.Done()
+			}()
+			return nil
+		})
+		go func() {
+			wg.Wait()
+			close(res)
+		}()
+	} ()
+	return res
+}
 
+func printDir(res chan []ScanResult) {
+	for arg := range res {
+		for i := range arg {
+			if *lineNumber {
+				fmt.Printf("%s:%d:%s\n", arg[i].file, arg[i].lineNumber, arg[i].line)
+			} else {
+				fmt.Printf("%s:%s\n", arg[i].file, arg[i].line)
+			}
+		}
+	}
 }
 
 func main() {
@@ -83,9 +128,12 @@ func main() {
 		exit("%s: is a directory", info.Name())
 	}
 
+	start := time.Now()
 	if info.IsDir() && recursive {
-		processDirectory(path, pattern)
+		result := processDirectory(path, pattern)
+		printDir(result)
 	} else {
 		processFile(path, pattern)
 	}
+	fmt.Println("Elapsed: ", time.Now().Sub(start))
 }
